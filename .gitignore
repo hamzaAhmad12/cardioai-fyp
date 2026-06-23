@@ -1,0 +1,52 @@
+# Virtual environments (all of them, anywhere in the project)
+venv/
+venv311/
+env/
+ENV/
+.venv/
+**/venv/
+**/venv311/
+**/.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Environment variables / secrets
+.env
+*.env
+
+# Vector database (generated, large)
+**/chroma_db/
+
+# ML model files (optional — keep if small enough)
+# backend/models/*.pkl
+
+# HuggingFace cache
+.cache/
+*.safetensors
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Old scripts no longer needed
+start_ollama.bat
+run_backend.bat
+run_frontend.bat
+backend/test.py

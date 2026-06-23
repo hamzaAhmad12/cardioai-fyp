@@ -1,0 +1,40 @@
+# Web framework
+fastapi==0.109.0
+uvicorn==0.27.0
+starlette==0.35.1
+python-multipart==0.0.26
+
+# Data & ML
+pandas==3.0.2
+numpy==2.4.4
+scikit-learn==1.8.0
+scipy==1.17.1
+
+# RAG pipeline
+langchain==1.2.15
+langchain-community==0.4.1
+langchain-core==1.3.2
+langchain-huggingface==1.2.1
+langchain-groq==1.1.2
+langchain-chroma==1.1.0
+langchain-text-splitters==1.1.2
+
+# LLM & embeddings
+groq==0.37.1
+sentence-transformers==5.4.0
+transformers==5.5.3
+torch==2.11.0
+tokenizers==0.22.2
+
+# Vector database
+chromadb==1.5.7
+
+# PDF processing
+pypdf==3.17.4
+
+# Utilities
+python-dotenv==1.2.2
+pydantic==2.12.5
+pydantic-settings==2.13.1
+httpx==0.28.1
+requests==2.33.1
