@@ -17,6 +17,7 @@ import os
 import sys
 import traceback
 from datetime import datetime
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -45,7 +46,7 @@ logger = logging.getLogger("medical-ai")
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 if not GROQ_API_KEY:
     raise RuntimeError(
@@ -56,6 +57,7 @@ if not GROQ_API_KEY:
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BACKEND_DIR, "models", "heart_disease_logistic_model.pkl")
 SCALER_PATH = os.path.join(BACKEND_DIR, "models", "heart_disease_scaler.pkl")
+ENCODER_PATH = os.path.join(BACKEND_DIR, "models", "heart_disease_encoder.pkl")  # NEW
 CHROMA_DIR = os.path.join(BACKEND_DIR, "chroma_db")
 RAG_DIR = os.path.join(BACKEND_DIR, "rag")
 
@@ -63,6 +65,9 @@ if RAG_DIR not in sys.path:
     sys.path.insert(0, RAG_DIR)
 
 RISK_THRESHOLDS = {"low": 0.33, "medium": 0.66}
+
+# Categorical columns that were one-hot encoded during training
+CAT_COLS = ["cp", "thal", "restecg", "slope", "ca"]
 
 # ──────────────────────────────────────────────────────────────────
 # FastAPI app
@@ -107,11 +112,12 @@ class ChatMessage(BaseModel):
 
 
 # ──────────────────────────────────────────────────────────────────
-# ML model loading (once, at startup)
+# ML model + scaler + encoder loading (once, at startup)
 # ──────────────────────────────────────────────────────────────────
 
 ml_model = None
 scaler = None
+encoder = None          # NEW
 
 try:
     with open(MODEL_PATH, "rb") as f:
@@ -122,10 +128,14 @@ try:
         scaler = pickle.load(f)
     logger.info("Scaler loaded: %s", type(scaler).__name__)
 
+    with open(ENCODER_PATH, "rb") as f:
+        encoder = pickle.load(f)
+    logger.info("OneHotEncoder loaded: %s", type(encoder).__name__)
+
 except FileNotFoundError as e:
-    logger.error("Model file missing: %s", e)
+    logger.error("Model / scaler / encoder file missing: %s", e)
 except Exception:
-    logger.error("Unexpected error loading ML model:\n%s", traceback.format_exc())
+    logger.error("Unexpected error loading ML artifacts:\n%s", traceback.format_exc())
 
 
 def get_risk_level(probability: float) -> str:
@@ -138,11 +148,37 @@ def get_risk_level(probability: float) -> str:
 
 
 def prepare_patient_data(data: HeartDiseaseInput) -> pd.DataFrame:
-    """Convert request payload into a scaled DataFrame the model expects."""
+    """
+    Convert the original 13 features → OneHotEncoder (same as training)
+    → StandardScaler → DataFrame ready for the model.
+    """
+    if encoder is None or scaler is None:
+        raise RuntimeError("Encoder or Scaler not loaded")
+
+    # 1. Create DataFrame with the exact original columns
     df = pd.DataFrame([data.model_dump()])
-    if scaler is not None:
-        df = pd.DataFrame(scaler.transform(df), columns=df.columns)
-    return df
+
+    # 2. Apply the same OneHotEncoder that was used in training
+    encoded_array = encoder.transform(df[CAT_COLS])
+    encoded_df = pd.DataFrame(
+        encoded_array,
+        columns=encoder.get_feature_names_out(CAT_COLS),
+        index=df.index,
+    )
+
+    # 3. Keep the numeric columns in the same order as training
+    #    (drop the original categorical columns)
+    numeric_df = df.drop(columns=CAT_COLS)
+
+    # 4. Concatenate → this produces the exact same column structure
+    #    that the scaler and model saw during training
+    X = pd.concat([numeric_df, encoded_df], axis=1)
+
+    # 5. Scale
+    X_scaled = scaler.transform(X)
+    X_scaled_df = pd.DataFrame(X_scaled, columns=X.columns)
+
+    return X_scaled_df
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -211,7 +247,7 @@ def get_rag_components():
 
 
 # ──────────────────────────────────────────────────────────────────
-# RAG agent (patient-aware analysis) — optional, agentic layer
+# RAG agent (patient-aware analysis)
 # ──────────────────────────────────────────────────────────────────
 
 rag_agent = None
@@ -238,6 +274,8 @@ def root():
         "message": "Medical AI System API",
         "status": "running",
         "ml_model_loaded": ml_model is not None,
+        "scaler_loaded": scaler is not None,
+        "encoder_loaded": encoder is not None,          # NEW
         "rag_agent_loaded": rag_agent is not None,
         "timestamp": datetime.now().isoformat(),
     }
@@ -249,6 +287,7 @@ def health_check():
         "status": "healthy",
         "ml_model_loaded": ml_model is not None,
         "scaler_loaded": scaler is not None,
+        "encoder_loaded": encoder is not None,          # NEW
         "rag_agent_loaded": rag_agent is not None,
         "timestamp": datetime.now().isoformat(),
     }
@@ -257,8 +296,8 @@ def health_check():
 @app.post("/api/ml/predict")
 def predict_heart_disease(data: HeartDiseaseInput):
     """Heart disease risk prediction from the Logistic Regression model only."""
-    if ml_model is None:
-        raise HTTPException(status_code=503, detail="ML model not loaded")
+    if ml_model is None or encoder is None or scaler is None:
+        raise HTTPException(status_code=503, detail="ML model / encoder / scaler not loaded")
 
     try:
         patient_df = prepare_patient_data(data)
@@ -349,88 +388,170 @@ def chat_with_rag(message: ChatMessage):
         raise HTTPException(status_code=500, detail=f"RAG error: {str(e)}")
 
 
-@app.post("/api/combined/analyze")
-def combined_analysis(data: HeartDiseaseInput):
-    """
-    Integrated analysis: ML prediction feeds directly into the RAG prompt,
-    so recommendations are generated for this specific patient's risk
-    profile rather than as a generic guideline summary.
+# ============================================
+# COMBINED ANALYSIS ENDPOINT — REAL INTEGRATION
+# ML prediction → PatientParameters → ReAct Agent → Real RAG
+# ============================================
 
-    Note on response shape: this endpoint returns a nested structure
-    (ml_prediction / rag_analysis) while /api/ml/predict returns a flat
-    structure. This is a known inconsistency kept for frontend
-    compatibility — a future refactor should unify both under one schema.
+class CombinedAnalysisInput(BaseModel):
+    age: int
+    sex: int
+    cp: int
+    trestbps: int
+    chol: int
+    fbs: int
+    restecg: int
+    thalach: int
+    exang: int
+    oldpeak: float
+    slope: int
+    ca: int
+    thal: int
+    patient_question: Optional[str] = None
+
+@app.post("/api/combined/analyze")
+def combined_analysis(data: CombinedAnalysisInput):
     """
+    TRUE INTEGRATED ANALYSIS:
+    1. Run ML model on patient parameters
+    2. Create PatientParameters object (from patient_model.py)
+    3. Pass to MedicalAgent.analyze_patient() — the REAL ReAct agent
+    4. Agent selects real tools, runs real ChromaDB retrieval, real reranking
+    5. Returns actual tools used, actual guideline chunks retrieved
+    """
+    
     if ml_model is None:
         raise HTTPException(status_code=503, detail="ML model not loaded")
-
+    
+    if rag_agent is None:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG Agent not initialized. Make sure Ollama/Groq is running."
+        )
+    
     try:
-        patient_df = prepare_patient_data(data)
+        import traceback
+        
+        print("\n" + "="*60)
+        print(" REAL COMBINED ANALYSIS STARTED")
+        print("="*60)
+        
+        # ────────────────────────────────────────────────────
+        # STEP 1: Run ML Prediction
+        # ────────────────────────────────────────────────────
+        print("\n Step 1: Running ML Prediction...")
+        
+        heart_input = HeartDiseaseInput(
+            age=data.age, sex=data.sex, cp=data.cp,
+            trestbps=data.trestbps, chol=data.chol,
+            fbs=data.fbs, restecg=data.restecg,
+            thalach=data.thalach, exang=data.exang,
+            oldpeak=data.oldpeak, slope=data.slope,
+            ca=data.ca, thal=data.thal
+        )
+        
+        patient_df = prepare_patient_data(heart_input)
         prediction = ml_model.predict(patient_df)[0]
         probabilities = ml_model.predict_proba(patient_df)[0]
         risk_score = float(probabilities[1])
         risk_level = get_risk_level(risk_score)
-        prediction_label = "Heart Disease" if prediction == 1 else "Healthy"
-
-        _, _, _, llm = get_rag_components()
-
-        prompt = f"""Analyze this heart disease patient profile:
-
-Age: {data.age} | Sex: {"Male" if data.sex == 1 else "Female"}
-Chest pain type: {data.cp} | Resting BP: {data.trestbps} mmHg
-Cholesterol: {data.chol} mg/dL | Fasting blood sugar elevated: {bool(data.fbs)}
-Resting ECG: {data.restecg} | Max heart rate: {data.thalach} bpm
-Exercise-induced angina: {bool(data.exang)} | ST depression: {data.oldpeak}
-ST slope: {data.slope} | Major vessels: {data.ca} | Thalassemia: {data.thal}
-
-ML model prediction: {prediction_label} (risk level: {risk_level}, score: {risk_score:.2f})
-
-Provide:
-1. A short medical interpretation
-2. Key risk factors for this patient
-3. Basic, evidence-aligned recommendations
-
-Keep the response concise and professional."""
-
-        ai_analysis = llm.invoke(prompt).content
-
+        prediction_label = "Heart Disease Detected" if prediction == 1 else "Healthy"
+        
+        logger.info(f"✅ ML Prediction: {prediction_label} | Risk: {risk_level} ({risk_score:.2%})")
+        
+        # ────────────────────────────────────────────────────
+        # STEP 2: Build PatientParameters for the Real Agent
+        # ────────────────────────────────────────────────────
+        print("\n Step 2: Building PatientParameters object...")
+        
+        from patient_model import PatientParameters
+        
+        patient_params = PatientParameters(
+            age=data.age,
+            sex=data.sex,
+            chest_pain_type=data.cp,
+            resting_bp_s=data.trestbps,
+            cholesterol=data.chol,
+            fasting_blood_sugar=data.fbs,
+            resting_ecg=data.restecg,
+            max_heart_rate=data.thalach,
+            exercise_angina=data.exang,
+            oldpeak=data.oldpeak,
+            st_slope=data.slope,
+            model_prediction=int(prediction),
+            prediction_probability=risk_score,
+            patient_question=data.patient_question or "What do my results mean and what should I do?"
+        )
+        
+        logger.info(f"✅ PatientParameters built | Risk Level: {patient_params.risk_level()}")
+        
+        # ────────────────────────────────────────────────────
+        # STEP 3: Run the REAL ReAct Agent
+        # This calls the actual agent with real tools:
+        # - analyze_patient_risk_factors (real)
+        # - interpret_ml_prediction (real)
+        # - search_hypertension_guidelines (real ChromaDB)
+        # - search_chd_guidelines (real ChromaDB)
+        # - search_all_guidelines (real ChromaDB)
+        # ────────────────────────────────────────────────────
+        print("\n Step 3: Running REAL ReAct Agent...")
+        print(f"   Patient question: {patient_params.patient_question}")
+        
+        rag_result = rag_agent.analyze_patient(patient_params)
+        
+        actual_tools_used = rag_result.get("tools_used", [])
+        logger.info(f"✅ Agent completed | Tools actually used: {len(actual_tools_used)}")
+        
+        for tool in actual_tools_used:
+            logger.info(f"   - {tool.get('tool', 'unknown')}")
+        
+        # ────────────────────────────────────────────────────
+        # STEP 4: Build Clinical Summary
+        # ────────────────────────────────────────────────────
+        clinical_summary = patient_params.to_clinical_summary()
+        
+        # ────────────────────────────────────────────────────
+        # STEP 5: Return REAL Results
+        # ────────────────────────────────────────────────────
+        print("\n✅ REAL COMBINED ANALYSIS COMPLETE")
+        print("="*60 + "\n")
+        
         return {
             "success": True,
+            
+            # Real ML prediction
             "ml_prediction": {
                 "prediction": int(prediction),
                 "prediction_label": prediction_label,
                 "risk_score": round(risk_score, 4),
                 "probability_disease": round(risk_score, 4),
-                "probability_healthy": round(1 - risk_score, 4),
+                "probability_healthy": round(float(probabilities[0]), 4),
                 "risk_level": risk_level,
             },
+            
+            # Real RAG agent results (actual tools used, actual retrieved content)
             "rag_analysis": {
-                "answer": ai_analysis,
-                "guidelines_consulted": [
-                    "AHA_HYPERTENSION_GUIDELINES.pdf",
-                    "MUS_D1_chd.pdf",
-                ],
-                "tools_used": [
-                    {"tool": "analyze_patient_risk_factors"},
-                    {"tool": "search_medical_guidelines"},
-                    {"tool": "generate_personalized_recommendations"},
-                ],
+                "answer": rag_result.get("answer", "No answer generated"),
+                "tools_used": actual_tools_used,  # REAL tools, not hardcoded
+                "guidelines_consulted": list(set(
+                    tool.get("tool", "") 
+                    for tool in actual_tools_used
+                    if "guideline" in tool.get("tool", "").lower() 
+                    or "search" in tool.get("tool", "").lower()
+                )),
             },
-            "clinical_summary": (
-                f"PATIENT CLINICAL SUMMARY\n"
-                f"Age: {data.age} | Sex: {'Male' if data.sex == 1 else 'Female'}\n"
-                f"BP: {data.trestbps} mmHg | Cholesterol: {data.chol} mg/dL\n"
-                f"Max HR: {data.thalach} bpm | ST Depression: {data.oldpeak}\n"
-                f"Prediction: {prediction_label} | Risk: {risk_score:.1%} ({risk_level})"
-            ),
-            "timestamp": datetime.now().isoformat(),
+            
+            # Patient clinical summary
+            "clinical_summary": clinical_summary,
+            
+            "timestamp": datetime.now().isoformat()
         }
-
-    except HTTPException:
-        raise
+        
     except Exception as e:
-        logger.error("Combined analysis failed:\n%s", traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Combined analysis failed:\n{error_details}")
+        raise HTTPException(status_code=500, detail=f"Combined analysis error: {str(e)}")
 
 
 # ──────────────────────────────────────────────────────────────────

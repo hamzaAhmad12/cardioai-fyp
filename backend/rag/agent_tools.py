@@ -1,7 +1,22 @@
-from langchain.tools import tool
-from langchain_community.vectorstores import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
 from functools import lru_cache
+
+try:
+    from langchain_core.tools import tool
+except ImportError:
+    from langchain.tools import tool
+
+try:
+    from langchain_community.vectorstores import Chroma
+except ImportError:
+    try:
+        from langchain_chroma import Chroma
+    except ImportError:
+        from langchain.vectorstores import Chroma
+
+try:
+    from langchain_huggingface import HuggingFaceEmbeddings
+except ImportError:
+    from langchain_community.embeddings import HuggingFaceEmbeddings
 
 
 @lru_cache(maxsize=1)
@@ -27,7 +42,7 @@ def search_hypertension_guidelines(query: str) -> str:
     store = get_vector_store()
     results = store.similarity_search(
         query,
-        k=4,
+        k=2,
         filter={"guideline": "AHA_HYPERTENSION_GUIDELINES.pdf"}
     )
 
@@ -50,7 +65,7 @@ def search_chd_guidelines(query: str) -> str:
     store = get_vector_store()
     results = store.similarity_search(
         query,
-        k=4,
+        k=2,
         filter={"guideline": "MUS_D1_chd.pdf"}
     )
 
@@ -71,7 +86,7 @@ def search_all_guidelines(query: str) -> str:
     or when other specific tools did not return enough information.
     """
     store = get_vector_store()
-    results = store.similarity_search(query, k=6)
+    results = store.similarity_search(query, k=2)
 
     if not results:
         return "No relevant information found in any guideline."

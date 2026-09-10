@@ -46,7 +46,7 @@ backend/main.py  (FastAPI)
 | Backend | FastAPI + Uvicorn |
 | ML model | Scikit-learn · Logistic Regression |
 | RAG framework | LangChain |
-| LLM | Groq · Llama 3.1 8B Instant (cloud) |
+| LLM | Groq · GPT OSS 20B (cloud) |
 | Vector database | ChromaDB (local) |
 | Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (local) |
 | Reranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` (local) |
@@ -154,7 +154,7 @@ copy .env.example .env
 
 ```
 GROQ_API_KEY=gsk_your_key_here
-GROQ_MODEL=llama-3.1-8b-instant
+GROQ_MODEL=openai/gpt-oss-20b
 ```
 
 ### 4 — Build vector database (one-time)
@@ -179,7 +179,8 @@ python main.py
 **Terminal 2 — frontend:**
 
 ```bash
-cd Frontend
+cd "d:\Final Year Project\frontend"
+.\.venv\Scripts\Activate.ps1
 python -m streamlit run app.py
 # UI: http://localhost:8501
 ```

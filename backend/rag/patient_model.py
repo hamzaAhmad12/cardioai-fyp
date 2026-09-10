@@ -1,13 +1,12 @@
 # patient_model.py
-# Defines the data structure coming from your Flutter UI
+
 
 from pydantic import BaseModel, Field
 from typing import Optional
 
 class PatientParameters(BaseModel):
     """
-    Matches exactly the columns your ML model was trained on.
-    Flutter UI sends this as a JSON POST request.
+  
     """
     # Demographics
     age: int = Field(..., ge=1, le=120, description="Patient age")
@@ -61,7 +60,7 @@ class PatientParameters(BaseModel):
     # Optional question from patient
     patient_question: Optional[str] = Field(
         None,
-        description="Optional question typed by patient in Flutter UI"
+        description="What do my results mean?"
     )
 
     def risk_level(self) -> str:

@@ -282,7 +282,7 @@ with st.sidebar:
     st.markdown("---")
 
     page = st.radio(
-        "",
+        "Navigation",
         ["Home", "Heart Disease Prediction", "Medical Chatbot", "Integrated Analysis", "Technical Details", "About"],
         label_visibility="collapsed"
     )
@@ -309,13 +309,13 @@ if page == "Home":
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown('<div class="stat-card"><p class="stat-val">85.7%</p><p class="stat-lbl">ML Accuracy</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="stat-card"><p class="stat-val">85.25%</p><p class="stat-lbl">ML Accuracy</p></div>', unsafe_allow_html=True)
     with c2:
-        st.markdown('<div class="stat-card"><p class="stat-val">87.2%</p><p class="stat-lbl">Recall</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="stat-card"><p class="stat-val">87.88%</p><p class="stat-lbl">Recall</p></div>', unsafe_allow_html=True)
     with c3:
-        st.markdown('<div class="stat-card"><p class="stat-val">298</p><p class="stat-lbl">Patients trained</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="stat-card"><p class="stat-val">302</p><p class="stat-lbl">Patients trained</p></div>', unsafe_allow_html=True)
     with c4:
-        st.markdown('<div class="stat-card"><p class="stat-val">2</p><p class="stat-lbl">Clinical guidelines</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="stat-card"><p class="stat-val">5</p><p class="stat-lbl">Clinical guidelines</p></div>', unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -353,12 +353,7 @@ if page == "Home":
         """, unsafe_allow_html=True)
 
     st.markdown("""
-    <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:1.25rem 1.5rem;margin-top:0.5rem;">
-        <p class="section-label" style="color:#b91c1c;">Key integration</p>
-        <div style="font-size:0.9rem; color:#7f1d1d; line-height:1.6;">
-            The Integrated Analysis page passes the ML prediction result and full patient profile directly into the RAG prompt — recommendations are generated for the specific patient, not generically from guidelines.
-        </div>
-    </div>
+    
     """, unsafe_allow_html=True)
 
 
